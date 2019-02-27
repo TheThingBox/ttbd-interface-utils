@@ -1,8 +1,8 @@
 {
-  "name": "ttbd-wifi-utils",
+  "name": "ttbd-interface-utils",
   "version": "0.1.0",
   "main": "index.js",
-  "description": "A wifi module for TheThingBox under Docker",
+  "description": "A interface module for TheThingBox under Docker",
   "dependencies": {
     "mustache": "2.3.0",
     "ttbd-exec": "github:TheThingBox/ttbd-exec#8595423",
