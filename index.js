@@ -2,12 +2,12 @@ const exec = require('ttbd-exec');
 const mustache = require('mustache');
 
 module.exports = function (params) {
-    return new WIFI(params);
+    return new Interfaces(params);
 };
 
-var WIFI = function(params) {
-  if (!(this instanceof WIFI)){
-    return new WIFI(params)
+var Interfaces = function(params) {
+  if (!(this instanceof Interfaces)){
+    return new Interfaces(params)
   }
   this.exec_opt = {hydra_exec_host: "mosquitto"}
   if(params){
@@ -17,25 +17,25 @@ var WIFI = function(params) {
   this.iw = require('ttbd-iwlist')('wlan0', this.exec_opt);
 }
 
-WIFI.prototype.scan = function(){
+Interfaces.prototype.scanWiFi = function(){
   return new Promise( (resolve, reject) => {
-    this._scan().then(data => {
+    this._scanWiFi().then(data => {
       resolve(data)
     }).catch( err => {
-      return this._scan()
+      return this._scanWiFi()
     }).then(data => {
       resolve(data)
     }).catch( err => {
-      return this._scan()
+      return this._scanWiFi()
     }).then(data => {
       resolve(data)
     }).catch( err => {
-      resolve(WIFI.emptyWifiList)
+      resolve(Interfaces.emptyWifiList)
     })
   })
 }
 
-WIFI.prototype._scan = function(){
+Interfaces.prototype._scanWiFi = function(){
   return new Promise( (resolve, reject) => {
     this.iw.scan(function(err, networks){
       if(err){
@@ -57,11 +57,11 @@ WIFI.prototype._scan = function(){
   })
 }
 
-WIFI.prototype.setWiFi = function(params){
+Interfaces.prototype.setWiFi = function(params){
   return new Promise( (resolve, reject) => {
     console.log(params)
-    var script_set_wifi = getScript('set_wifi')
-    var script_set_ssid = getScript('set_wpa_supplicant', { ssid: params.ssid, passphrase: params.password || ''})
+    var script_set_wifi = Interfaces.getIntefacesScript('set_dhcp', { interface: 'wlan0' })
+    var script_set_ssid = Interfaces.getIntefacesScript('set_wpa_supplicant', { ssid: params.ssid, passphrase: params.password || ''})
     exec({file: script_set_ssid}, this.exec_bash_opt, (err, stdout, stderr) => {
       if(err){
         reject(err)
@@ -78,7 +78,7 @@ WIFI.prototype.setWiFi = function(params){
   })
 }
 
-WIFI.prototype.enableAPOnWlan = function(ssid_id = 'ap'){
+Interfaces.prototype.enableAcessPointOnWlan = function(ssid_id = 'ap'){
   return new Promise( (resolve, reject) => {
     var _interfaces
     this.getInterfaces()
@@ -119,7 +119,7 @@ WIFI.prototype.enableAPOnWlan = function(ssid_id = 'ap'){
   })
 }
 
-WIFI.prototype.rebootDevice = function(){
+Interfaces.prototype.rebootDevice = function(){
   exec('reboot', this.exec_opt, function(err, stdout, stderr){
     if(err){
       console.log('reboot');
@@ -130,21 +130,21 @@ WIFI.prototype.rebootDevice = function(){
   });
 }
 
-WIFI.prototype.setAccessPoint = function(ssid){
+Interfaces.prototype.setAccessPoint = function(ssid){
   return new Promise( (resolve, reject) => {
     const _enable = ssid!==false
-    const _mode = (_enable===true?'enable_ap':'disable_ap'
-    exec({file: WIFI.getScript(_mode), { ssid_id: ssid })}, this.exec_bash_opt, function(err, stdout, stderr){
+    const _mode = (_enable===true)?'enable_ap':'disable_ap'
+    exec({file: Interfaces.getIntefacesScript(_mode, { ssid_id: ssid })}, this.exec_bash_opt, function(err, stdout, stderr){
       if(err){
         reject(err)
       } else {
         resolve(stdout)
       }
-    });
+    })
   })
 }
 
-WIFI.prototype.accessPointIsEnable = function(){
+Interfaces.prototype.accessPointIsEnable = function(){
   return new Promise( (resolve, reject) => {
     exec("sed -n '/TTB START DEFINITION ACCESS_POINT/=' /etc/dhcpcd.conf", this.exec_opt, function(err, stdout, stderr){
       var res = false
@@ -156,10 +156,10 @@ WIFI.prototype.accessPointIsEnable = function(){
   })
 }
 
-WIFI.prototype.getIPs = function(){
+Interfaces.prototype.getIPs = function(){
   return new Promise( (resolve, reject) => {
     var ips = [];
-    exec('hostname -I', exec_opt, function(err, stdout, stderr){
+    exec('hostname -I', this.exec_opt, function(err, stdout, stderr){
       if(stdout || stdout === ''){
         stdout = stdout.replace(/\n/g, ' ').trim()
         ips = stdout.split(' ').filter(e => !e.startsWith('169.254') && !e.startsWith('172.17') && !e.startsWith('172.18') && e !== '127.0.0.1')
@@ -169,7 +169,7 @@ WIFI.prototype.getIPs = function(){
   })
 }
 
-WIFI.prototype.getInterfaces = function(){
+Interfaces.prototype.getInterfaces = function(){
   return new Promise( (resolve, reject) => {
     exec('ip link show', this.exec_opt, function(err, stdout, stderr){
       if(err){
@@ -181,23 +181,23 @@ WIFI.prototype.getInterfaces = function(){
       var result = {}
 
       for(var i in interfaces){
-          let netInterface = interfaces[i].replace(/\s\s+/g, ' ').split(' ')
-          let interfaceName = netInterface[1].slice(0, -1)
-          result[interfaceName] = {
-              state: WIFI.ipLinkShowParseParam(netInterface, 'state'),
-              mode: WIFI.ipLinkShowParseParam(netInterface, 'mode'),
-              mtu: WIFI.ipLinkShowParseParam(netInterface, 'mtu'),
-              group: WIFI.ipLinkShowParseParam(netInterface, 'group'),
-              qdisc: WIFI.ipLinkShowParseParam(netInterface, 'qdisc'),
-              qlen: WIFI.ipLinkShowParseParam(netInterface, 'qlen')
-          }
+        let netInterface = interfaces[i].replace(/\s\s+/g, ' ').split(' ')
+        let interfaceName = netInterface[1].slice(0, -1)
+        result[interfaceName] = {
+          state: Interfaces.ipLinkShowParseParam(netInterface, 'state'),
+          mode: Interfaces.ipLinkShowParseParam(netInterface, 'mode'),
+          mtu: Interfaces.ipLinkShowParseParam(netInterface, 'mtu'),
+          group: Interfaces.ipLinkShowParseParam(netInterface, 'group'),
+          qdisc: Interfaces.ipLinkShowParseParam(netInterface, 'qdisc'),
+          qlen: Interfaces.ipLinkShowParseParam(netInterface, 'qlen')
+        }
       }
       resolve(result)
     })
   })
 }
 
-WIFI.getScript = function(mode = 'set_wifi', options = {}){
+Interfaces.getIntefacesScript = function(mode, options = {}){
   var sc = {
     enable_ap: {
       file: 'set_access_point.sh',
@@ -209,10 +209,10 @@ WIFI.getScript = function(mode = 'set_wifi', options = {}){
       file: 'unset_access_point.sh',
       mustache: {}
     },
-    set_wifi: {
+    set_dhcp: {
       file: 'set_dhcp.sh',
       mustache: {
-        net_env_interface: 'wlan0'
+        net_env_interface: options.interface
       }
     },
     set_wpa_supplicant: {
@@ -229,10 +229,12 @@ WIFI.getScript = function(mode = 'set_wifi', options = {}){
         return null
     }
     return mustache.render(fs.readFileSync(script_path, {encoding: 'utf8'}), sc[mode].mustache)
+  } else {
+    return null
   }
 }
 
-WIFI.ipLinkShowParseParam = function(line, key){
+Interfaces.ipLinkShowParseParam = function(line, key){
   let paramIndex = line.indexOf(key)
   if(paramIndex !== -1 && paramIndex < line.length-1){
     return line[paramIndex+1]
@@ -241,4 +243,4 @@ WIFI.ipLinkShowParseParam = function(line, key){
   }
 }
 
-WIFI.emptyWifiList = { wifilist: { secured: [], open: [] } }
+Interfaces.emptyWifiList = { wifilist: { secured: [], open: [] } }
