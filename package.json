@@ -1,5 +1,5 @@
 {
-  "name": "ttbd-wifi-util",
+  "name": "ttbd-wifi-utils",
   "version": "0.1.0",
   "main": "index.js",
   "description": "A wifi module for TheThingBox under Docker",
