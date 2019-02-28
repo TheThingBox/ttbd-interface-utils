@@ -61,9 +61,15 @@ Interfaces.prototype._scanWiFi = function(){
 
 Interfaces.prototype.setWiFi = function(params){
   return new Promise( (resolve, reject) => {
-    console.log(params)
-    var script_set_wifi = Interfaces.getIntefacesScript('set_dhcp', { interface: 'wlan0' })
-    var script_set_ssid = Interfaces.getIntefacesScript('set_wpa_supplicant', { ssid: params.ssid, passphrase: params.password || ''})
+    var script_set_ssid
+    var script_set_wifi
+    try {
+      script_set_ssid = Interfaces.getIntefacesScript('set_wpa_supplicant', { ssid: params.ssid, passphrase: params.password || ''})
+      script_set_wifi = Interfaces.getIntefacesScript('set_dhcp', { interface: 'wlan0' })
+    }catch(e){
+      reject(e)
+    }
+
     exec({file: script_set_ssid}, this.exec_bash_opt, (err, stdout, stderr) => {
       if(err){
         reject(err)
@@ -123,6 +129,17 @@ Interfaces.prototype.enableAcessPointOnWlan = function(ssid_id = 'ap'){
 
 Interfaces.prototype.rebootDevice = function(){
   exec('reboot', this.exec_opt, function(err, stdout, stderr){
+    if(err){
+      console.log('reboot');
+      console.log(err);
+      console.log(stdout);
+      console.log(stderr);
+    }
+  });
+}
+
+Interfaces.prototype.restartNodered = function(){
+  exec('docker restart thethingbox', this.exec_opt, function(err, stdout, stderr){
     if(err){
       console.log('reboot');
       console.log(err);
@@ -196,6 +213,31 @@ Interfaces.prototype.getInterfaces = function(){
       }
       resolve(result)
     })
+  })
+}
+
+Interfaces.prototype.getHostname = function(){
+  return new Promise( (resolve, reject) => {
+    exec('cat /etc/hostname', this.exec_opt, function(err, stdout, stderr){
+      if(err){
+        reject(err)
+      } else {
+        resolve(stdout.replace(/[\r\n\t\f\v]/g, "").trim().replace(/[ ]+/g,"_"))
+      }
+    });
+  })
+}
+
+Interfaces.prototype.setHostname = function(hostname){
+  return new Promise( (resolve, reject) => {
+    _hostname = hostname.replace(/[\r\n\t\f\v]/g, "").trim().replace(/[ ]+/g,"_")
+    exec(`echo ${_hostname} > /etc/hostname`, this.exec_opt, function(err, stdout, stderr){
+      if(err){
+        reject(err)
+      } else {
+        resolve(_hostname)
+      }
+    });
   })
 }
 
