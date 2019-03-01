@@ -1,22 +1,35 @@
-const exec = require('ttbd-exec');
-const mustache = require('mustache');
+const { execFile } = require('child_process');
 const path = require('path')
 const fs = require('fs')
+const mqtt = require('mqtt');
+const uuid = require('uuid/v4');
+const mustache = require('mustache');
 
-module.exports = function (params) {
-    return new Interfaces(params);
-};
+var Interfaces = function(params = {}) {
 
-var Interfaces = function(params) {
-  if (!(this instanceof Interfaces)){
-    return new Interfaces(params)
+  this.ttb_crypto = {
+    bin: path.join(__dirname, 'bin', 'ttb-crypto'),
+    algo: 'aes-256-gcm',
+    options:  {
+      encoding: 'utf8',
+      timeout: 0,
+      maxBuffer: 200 * 1024,
+      killSignal: 'SIGTERM',
+      cwd: null,
+      env: null,
+      uid: 0,
+      gid: 0
+    },
+    private_key: path.join('/root/certs', params.private_key || 'my-ttb.key.pem'),
+    public_key: path.join('/root/certs', params.public_key || 'my-ttb.pub'),
+    server_key: path.join('/root/certs', params.server_key || 'serv.pub')
   }
-  this.exec_opt = {hydra_exec_host: "mosquitto"}
-  if(params){
-    this.exec_opt =  Object.assign(this.exec_opt, params)
+
+  this.hydra_exec = {
+    host: params.hydra_exec_host || 'mosquitto',
+    port: params.hydra_exec_port || 1883,
+    base_topic: params.hydra_exec_base_topic || 'hydra_exec'
   }
-  this.exec_bash_opt = Object.assign({}, this.exec_opt, {type: "bash"})
-  this.iw = require('ttbd-iwlist')('wlan0', this.exec_opt);
 }
 
 Interfaces.prototype.scanWiFi = function(){
@@ -39,22 +52,62 @@ Interfaces.prototype.scanWiFi = function(){
 
 Interfaces.prototype._scanWiFi = function(){
   return new Promise( (resolve, reject) => {
-    this.iw.scan(function(err, networks){
-      if(err){
-        reject(err)
-      } else {
-        wifilist = networks.filter(function(e){
-          return (e.essid)?true:false;
-        }).filter((thing, index, self) => {
-          return index === self.findIndex((t) => t.essid === thing.essid)
-        });
-        resolve({
-          wifilist: {
-            secured: wifilist.filter(function(d){return d.encrypted}),
-            open: wifilist.filter(function(d){return !d.encrypted})
-          }
-        })
+
+    this.hostExec(`iwlist wlan0 scan`)
+    .then( stdout => {
+      var ap = []
+      var current = null;
+      var regex_address = /^\s+Cell \d+ - Address: (\S+)/
+      var regex_essid = /^\s+ESSID:"(.+)"/
+      var regex_encrypted = /^\s+Encryption key:(.+)/
+      var regex_signal = /Signal level=(.+?)\//
+
+      var lines = stdout.split('\n')
+      for(var index in lines){
+        var m;
+        if (m = regex_address.exec(lines[index])) {
+            current = { address : m[1] };
+            ap.push(current);
+            continue;
+        }
+        if (!current){
+          continue
+        };
+
+        if (m = regex_essid.exec(lines[index])) {
+            current.essid = m[1];
+        }
+        if (m = regex_encrypted.exec(lines[index])) {
+            current.encrypted = m[1] !== 'off';
+        }
+        if (m = regex_signal.exec(lines[index])) {
+          current.signal = +m[1]
+        }
       }
+
+      var wifilist = ap.sort((a, b) => {
+        if(a.signal < b.signal){
+          return 1;
+        }
+        if(a.signal > b.signal){
+          return -1;
+        }
+        return 0;
+      }).filter(function(e){
+        return (e.essid)?true:false;
+      }).filter((thing, index, self) => {
+        return index === self.findIndex((t) => t.essid === thing.essid)
+      })
+
+      resolve({
+        wifilist: {
+          secured: wifilist.filter(function(d){return d.encrypted}),
+          open: wifilist.filter(function(d){return !d.encrypted})
+        }
+      })
+    })
+    .catch( error => {
+      reject(error)
     })
   })
 }
@@ -70,19 +123,16 @@ Interfaces.prototype.setWiFi = function(params){
       reject(e)
     }
 
-    exec({file: script_set_ssid}, this.exec_bash_opt, (err, stdout, stderr) => {
-      if(err){
-        reject(err)
-        return
-      }
-      exec({file: script_set_wifi}, this.exec_bash_opt, (err2, stdout2, stderr2) => {
-        if(err2){
-          reject(err2)
-          return
-        }
-        resolve()
-      });
-    });
+    this.hostExec(script_set_ssid, 'bash')
+    .then( stdout => {
+      return this.hostExec(script_set_wifi, 'bash')
+    })
+    .then( stdout => {
+      resolve()
+    })
+    .catch( error => {
+      reject(error)
+    })
   })
 }
 
@@ -127,35 +177,15 @@ Interfaces.prototype.enableAcessPointOnWlan = function(ssid_id = 'ap'){
   })
 }
 
-Interfaces.prototype.rebootDevice = function(){
-  exec('reboot', this.exec_opt, function(err, stdout, stderr){
-    if(err){
-      console.log('reboot');
-      console.log(err);
-      console.log(stdout);
-      console.log(stderr);
-    }
-  });
-}
-
-Interfaces.prototype.restartNodered = function(){
-  exec('docker restart thethingbox', this.exec_opt, function(err, stdout, stderr){
-    if(err){
-      console.log('reboot');
-      console.log(err);
-      console.log(stdout);
-      console.log(stderr);
-    }
-  });
-}
-
-Interfaces.prototype.setAccessPoint = function(ssid){
+Interfaces.prototype.localCipher = function(plaintext){
+  payload = JSON.stringify(plaintext).replace(/"/g, '\"')
+  var cmdEncrypt = ['-action=encrypt', `-algo=${this.ttb_crypto.algo}`, `-private_key=${this.ttb_crypto.private_key}`, `-public_key=${this.ttb_crypto.public_key}`, `-text=${payload}`]
   return new Promise( (resolve, reject) => {
-    const _enable = ssid!==false
-    const _mode = (_enable===true)?'enable_ap':'disable_ap'
-    exec({file: Interfaces.getIntefacesScript(_mode, { ssid_id: ssid })}, this.exec_bash_opt, function(err, stdout, stderr){
-      if(err){
-        reject(err)
+    execFile(this.ttb_crypto.bin, cmdEncrypt, this.ttb_crypto.options, (error, stdout, stderr) => {
+      if (error) {
+        reject(error)
+      } else if(!stdout && stderr){
+        reject(stderr)
       } else {
         resolve(stdout)
       }
@@ -163,38 +193,156 @@ Interfaces.prototype.setAccessPoint = function(ssid){
   })
 }
 
+Interfaces.prototype.localDecipher = function(ciphertext){
+  var cmdDecrypt = ['-action=decrypt', `-algo=${this.ttb_crypto.algo}`, `-private_key=${this.ttb_crypto.private_key}`, `-public_key=${this.ttb_crypto.public_key}`, `-text=${ciphertext}`]
+  return new Promise( (resolve, reject) => {
+    execFile(this.ttb_crypto.bin, cmdDecrypt, this.ttb_crypto.options, (error, stdout, stderr) => {
+      if (error) {
+        reject(error)
+      } else if(!stdout && stderr){
+        reject(stderr)
+      } else {
+        resolve(stdout)
+      }
+    })
+  })
+}
+
+Interfaces.prototype.hostExec = function(command, type = 'cmd'){
+  return new Promise( (resolve, reject) => {
+    var payload = {}
+
+    if(type === 'cmd'){
+      payload.cmd = command
+    } else if(type === 'bash') {
+      payload.file = command
+    } else {
+      reject(`Unsupported command type: ${type}`)
+      return
+    }
+
+    this.localCipher(payload)
+    .then( ciphertext => {
+      var client = mqtt.connect(`mqtt://${this.hydra_exec.host}:${this.hydra_exec.port}`)
+      var id = uuid()
+      var keyname = this.ttb_crypto.public_key.split('/')
+      keyname = keyname[keyname.length-1]
+      client.on('connect', () => {
+        client.subscribe(`${this.hydra_exec.base_topic}/out`)
+        client.publish(`${this.hydra_exec.base_topic}/in`, JSON.stringify({
+          id,
+          type: type,
+          keyname: keyname,
+          payload: ciphertext
+        }))
+      })
+
+      client.on('message', (topic, message) => {
+        try{
+          message = JSON.parse(message.toString())
+        } catch(e) {
+          message = {}
+        }
+        if(message.id && message.id === id){
+          client.end()
+          if(message.error){
+            reject(message.error)
+          } else {
+            this.localDecipher(message.payload)
+            .then( plaintext => {
+              try{
+                plaintext = JSON.parse(plaintext)
+              } catch(e){}
+              if(plaintext.error){
+                reject(plaintext.error)
+              } else if(!plaintext.stdout && plaintext.stderr){
+                reject(plaintext.stderr)
+              } else {
+                resolve(plaintext.stdout)
+              }
+            })
+            .catch( err => {
+              reject(err)
+            })
+          }
+        }
+      })
+    })
+    .catch( err => {
+      reject(err)
+    })
+  })
+}
+
+Interfaces.prototype.rebootDevice = function(){
+  this.hostExec('reboot').catch(console.log)
+}
+
+Interfaces.prototype.restartNodered = function(){
+  this.hostExec('docker restart thethingbox').catch(console.log)
+}
+
+Interfaces.prototype.shutdownDevice = function(){
+  this.hostExec('poweroff').catch(console.log)
+}
+
+Interfaces.prototype.setAccessPoint = function(ssid){
+  return new Promise( (resolve, reject) => {
+    const _enable = ssid!==false
+    const _mode = (_enable===true)?'enable_ap':'disable_ap'
+    this.hostExec(Interfaces.getIntefacesScript(_mode, { ssid_id: ssid }), 'bash')
+    .then( stdout => {
+      resolve(stdout)
+    })
+    .catch( error => {
+      reject(error)
+    })
+  })
+}
+
 Interfaces.prototype.accessPointIsEnable = function(){
   return new Promise( (resolve, reject) => {
-    exec("sed -n '/TTB START DEFINITION ACCESS_POINT/=' /etc/dhcpcd.conf", this.exec_opt, function(err, stdout, stderr){
+    this.hostExec("sed -n '/TTB START DEFINITION ACCESS_POINT/=' /etc/dhcpcd.conf")
+    .then( stdout => {
       var res = false
       if(stdout && stdout.trim() !== ''){
         res = true
       }
       resolve(res)
-    });
+    })
+    .catch( error => {
+      resolve(false)
+    })
   })
 }
 
-Interfaces.prototype.getIPs = function(){
+Interfaces.prototype.getIPs = function(ip_filtre){
   return new Promise( (resolve, reject) => {
     var ips = [];
-    exec('hostname -I', this.exec_opt, function(err, stdout, stderr){
+    var _ip_filtre = ip_filtre || [
+      '169.254',
+      '172.17',
+      '172.18',
+      '127.0.0.1'
+    ]
+    this.hostExec('hostname -I')
+    .then( stdout => {
       if(stdout || stdout === ''){
         stdout = stdout.replace(/\n/g, ' ').trim()
-        ips = stdout.split(' ').filter(e => !e.startsWith('169.254') && !e.startsWith('172.17') && !e.startsWith('172.18') && e !== '127.0.0.1')
+        ips = stdout.split(' ').filter(e => _ip_filtre.filter(f => e.startsWith(f)).length === 0 )
       }
       resolve(ips)
+    })
+    .catch( error => {
+      reject(error)
     })
   })
 }
 
 Interfaces.prototype.getInterfaces = function(){
   return new Promise( (resolve, reject) => {
-    exec('ip link show', this.exec_opt, function(err, stdout, stderr){
-      if(err){
-        reject(err)
-        return
-      }
+    this.hostExec('ip link show')
+    .then( stdout => {
       var interfaces = stdout.split('\n')
       interfaces = interfaces.filter(e => e && !e.startsWith(' '))
       var result = {}
@@ -213,31 +361,34 @@ Interfaces.prototype.getInterfaces = function(){
       }
       resolve(result)
     })
+    .catch( error => {
+      reject(error)
+    })
   })
 }
 
 Interfaces.prototype.getHostname = function(){
   return new Promise( (resolve, reject) => {
-    exec('cat /etc/hostname', this.exec_opt, function(err, stdout, stderr){
-      if(err){
-        reject(err)
-      } else {
-        resolve(stdout.replace(/[\r\n\t\f\v]/g, "").trim().replace(/[ ]+/g,"_"))
-      }
-    });
+    this.hostExec('cat /etc/hostname')
+    .then( stdout => {
+      resolve(Interfaces.formatHostname(stdout))
+    })
+    .catch( error => {
+      reject(error)
+    })
   })
 }
 
 Interfaces.prototype.setHostname = function(hostname){
   return new Promise( (resolve, reject) => {
-    _hostname = hostname.replace(/[\r\n\t\f\v]/g, "").trim().replace(/[ ]+/g,"_")
-    exec(`echo ${_hostname} > /etc/hostname`, this.exec_opt, function(err, stdout, stderr){
-      if(err){
-        reject(err)
-      } else {
-        resolve(_hostname)
-      }
-    });
+    hostname = Interfaces.formatHostname(hostname)
+    this.hostExec(`echo ${hostname} > /etc/hostname`)
+    .then( stdout => {
+      resolve(hostname)
+    })
+    .catch( error => {
+      reject(error)
+    })
   })
 }
 
@@ -268,7 +419,7 @@ Interfaces.getIntefacesScript = function(mode, options = {}){
     }
   }
   if(sc.hasOwnProperty(mode)){
-    let script_path = path.join(__dirname, 'node_modules', 'ttbd-node-interfaces', 'scripts', sc[mode].file)
+    let script_path = path.join(__dirname, 'scripts', sc[mode].file)
     if(fs.existsSync(script_path) === false){
         return null
     }
@@ -287,4 +438,10 @@ Interfaces.ipLinkShowParseParam = function(line, key){
   }
 }
 
+Interfaces.formatHostname = function(hostname){
+  return hostname.replace(/[\r\n\t\f\v]/g, "").trim().replace(/[ ]+/g,"_")
+}
+
 Interfaces.emptyWifiList = { wifilist: { secured: [], open: [] } }
+
+module.exports = Interfaces

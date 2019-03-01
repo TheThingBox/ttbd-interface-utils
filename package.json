@@ -1,12 +1,11 @@
 {
   "name": "ttbd-interface-utils",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "main": "index.js",
-  "description": "A interface module for TheThingBox under Docker",
+  "description": "An host interface module for TheThingBox under Docker",
   "dependencies": {
+    "mqtt": "2.18.8",
     "mustache": "2.3.0",
-    "ttbd-exec": "github:TheThingBox/ttbd-exec#8595423",
-    "ttbd-iwlist": "github:TheThingBox/ttbd-iwlist#90c1ae6",
-    "ttbd-node-interfaces": "github:TheThingBox/ttbd-node-interfaces#2619bc9"
+    "uuid": "3.3.2"
   }
 }
