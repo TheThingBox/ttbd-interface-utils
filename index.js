@@ -4,6 +4,37 @@ const fs = require('fs')
 const mqtt = require('mqtt');
 const uuid = require('uuid/v4');
 const mustache = require('mustache');
+const axios = require('axios');
+
+var Zoib = function(interfaces, zoibOptions = {}) {
+  this.server = zoibOptions.server || 'https://zoib.digitalairways.com:443'
+  this.login = zoibOptions.login || null
+  this.password = zoibOptions.password || null
+  this.challenge = null
+  this.interfaces = interfaces
+
+}
+
+Zoib.prototype.setAccount = function(login, password){
+  this.login = login
+  this.password = password
+}
+
+Zoib.prototype.getChallenge = function() {
+  return new Promise( (resolve, reject) => {
+    axios.get(`${this.server}/challenge`, { params: { login: this.login } })
+    .then( resp => resolve(resp.data))
+    .catch(reject)
+  })
+};
+
+Zoib.prototype.zoibLogin = function() {
+  return new Promise( (resolve, reject) => {
+    axios.post(`${this.server}/login`, { login: this.login, challenge: this.challenge }, { headers: { 'Content-Type' : 'application/json; charset=utf-8' } })
+    .then( resp => resolve(resp.data))
+    .catch(reject)
+  })
+};
 
 var Interfaces = function(params = {}) {
 
@@ -30,6 +61,14 @@ var Interfaces = function(params = {}) {
     port: params.hydra_exec_port || 1883,
     base_topic: params.hydra_exec_base_topic || 'hydra_exec'
   }
+
+  var zoibOptions = {
+    server: params.zoib_server,
+    login:  params.zoib_login,
+    password:  params.zoib_password
+  }
+
+  this.ZOIB = new Zoib(this, zoibOptions)
 }
 
 Interfaces.prototype.scanWiFi = function(){
