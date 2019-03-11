@@ -3,6 +3,9 @@
   "version": "0.2.0",
   "main": "index.js",
   "description": "An host interface module for TheThingBox under Docker",
+  "scripts":{
+    "postinstall": "chmod +x ./bin/*"
+  },
   "dependencies": {
     "axios": "0.18.0",
     "mqtt": "2.18.8",
