@@ -190,7 +190,7 @@ Interfaces.prototype.enableAcessPointOnWlan = function(ssid_id = 'ap'){
         this.setAccessPoint(ssid_id).then( () => {
           setTimeout( () => {
             this.setAccessPoint(false)
-          }, 60000)
+          }, 600000)
           resolve(true)
         })
       } else if (ips.indexOf('192.168.61.1') !== -1){
@@ -202,7 +202,7 @@ Interfaces.prototype.enableAcessPointOnWlan = function(ssid_id = 'ap'){
         } else if(ips.length === 1){
           setTimeout( () => {
             this.setAccessPoint(false)
-          }, 60000)
+          }, 600000)
           resolve(false)
         } else {
           resolve(false)
