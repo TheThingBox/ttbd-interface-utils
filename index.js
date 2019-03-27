@@ -1,43 +1,215 @@
 const { execFile } = require('child_process');
 const path = require('path')
 const fs = require('fs')
+const crypto = require('crypto');
 const mqtt = require('mqtt');
 const uuid = require('uuid/v4');
 const mustache = require('mustache');
 const axios = require('axios');
+const checkInternetConnected = require('check-internet-connected');
+const Locker = require('async-lock')
 
-var Zoib = function(interfaces, zoibOptions = {}) {
-  this.server = zoibOptions.server || 'https://zoib.digitalairways.com:443'
-  this.login = zoibOptions.login || null
-  this.password = zoibOptions.password || null
+var ConcurrentFifo = function(){
+  this.id = uuid()
+  this.fifo = []
+  this.locker = new Locker()
+}
+
+ConcurrentFifo.prototype.get = function(){
+  return new Promise( (resolve, reject) => {
+    this.locker.acquire(this.id, () =>{
+      return this.fifo.shift()
+    })
+    .then( (data) => {
+      resolve(data || null)
+    })
+  })
+}
+
+ConcurrentFifo.prototype.add = function(data){
+  return new Promise( (resolve, reject) => {
+    this.locker.acquire(this.id, () =>{
+      this.fifo.push(data)
+    })
+    .then(() => {
+      resolve()
+    })
+  })
+}
+
+var ZOIB = function(interfaces, options = {}) {
+  this.server = options.server || 'https://zoib.digitalairways.com:443'
+  this.token0 = new ConcurrentFifo()
+  this.tokens = new ConcurrentFifo()
+  this._login = options.login || null
+  this._password = options.password || null
   this.challenge = null
+  if(options.token){
+    token0.add(options.tokens)
+  }
   this.interfaces = interfaces
-
 }
 
-Zoib.prototype.setAccount = function(login, password){
-  this.login = login
-  this.password = password
-}
-
-Zoib.prototype.getChallenge = function() {
+ZOIB.prototype.reachable = function(options = {}){
   return new Promise( (resolve, reject) => {
-    axios.get(`${this.server}/challenge`, { params: { login: this.login } })
-    .then( resp => resolve(resp.data))
+    var _config = {}
+    _config.domain = this.server
+    _config.timeout = options.timeout || 10000
+    _config.retries = options.retries || 2
+    if(options && options.servers){
+      _config.servers = options.servers
+    }
+    checkInternetConnected(_config)
+    .then(result => {
+      if(result && Array.isArray(result) && result.length > 0){
+        resolve(true)
+      } else {
+        resolve(false)
+      }
+    })
+    .catch(err => {
+      resolve(false)
+    })
+  })
+}
+
+ZOIB.prototype.setAccount = function(login, password){
+  this._login = login
+  this._password = password
+}
+
+ZOIB.prototype.getChallenge = function() {
+  return new Promise( (resolve, reject) => {
+    axios.get(`${this.server}/challenge`, { params: { login: this._login } })
+    .then( resp => {
+      if(resp.data && resp.data.challenge) {
+        const hash = crypto.createHash('sha512')
+        hash.update(`${resp.data.challenge}-${this._login}-${this._password}`)
+        resolve(hash.digest('hex').toUpperCase())
+      } else {
+        reject()
+      }
+    })
     .catch(reject)
   })
 };
 
-Zoib.prototype.zoibLogin = function() {
+ZOIB.prototype.login = function() {
   return new Promise( (resolve, reject) => {
-    axios.post(`${this.server}/login`, { login: this.login, challenge: this.challenge }, { headers: { 'Content-Type' : 'application/json; charset=utf-8' } })
-    .then( resp => resolve(resp.data))
+    this.getChallenge()
+    .then(challenge => {
+      axios.post(`${this.server}/login`, { login: this._login, challenge: challenge }, { headers: { 'Content-Type' : 'application/json; charset=utf-8' } })
+      .then(resp => {
+        if(resp.data && resp.data.message.toLowerCase() === "ok" && resp.data.token && resp.data.user){
+          resolve({token: resp.data.token, user: resp.data.user})
+        } else {
+          reject()
+        }
+      })
+      .catch(reject)
+    })
     .catch(reject)
   })
 };
+
+ZOIB.prototype.fork = function(token = null){
+  return new Promise( (resolve, reject) => {
+    var _getTokenPromise
+    var fromOrigin = false
+    if(token === null){
+      fromOrigin = true
+      _getTokenPromise = this.token0.get()
+    } else {
+      _getTokenPromise = new Promise((r) => {r(token)})
+    }
+    _getTokenPromise
+    .then(_token => {
+      if(_token){
+        axios.post(`${this.server}/fork`, { token: _token }, { headers: { 'Content-Type' : 'application/json' } })
+        .then((resp) => {
+          var data = resp.data
+          if(data && data.message.toUpperCase() === "OK" && Array.isArray(data.tokens) && data.tokens.length >= 2) {
+            resolve(data.tokens)
+          } else {
+            reject()
+          }
+        })
+        .catch(reject)
+      } else {
+        reject()
+      }
+    })
+  })
+}
+
+ZOIB.prototype.getToken = function(){
+  return new Promise((resolve, reject) => {
+    this.tokens.get()
+    .then(token => {
+      if(token){
+        this.fork(token)
+        .then(tokens => {
+          this.tokens.add(tokens[0])
+          .then(() => {
+            resolve(tokens[1])
+          })
+        })
+        .catch(reject)
+      } else {
+        this.fork()
+        .then(tokens => {
+          this.token0.add(tokens[0])
+          .then(() => {
+            resolve(tokens[1])
+          })
+        })
+        .catch(e => {
+          this.login().then(data => {
+            this.fork(data.token)
+            .then(tokens => {
+              this.token0.add(tokens[0])
+              .then(() => {
+                resolve(tokens[1])
+              })
+            })
+            .catch(reject)
+          })
+        })
+      }
+    })
+  })
+}
+
+var Coldfacts = function(interfaces, options = {}){
+  this.server = options.server || 'http://mythingbox.io:80'
+
+  this.interfaces = interfaces
+}
+
+Coldfacts.prototype.reachable = function(options = {}){
+  return new Promise( (resolve, reject) => {
+    var _config = {}
+    _config.domain = this.server
+    _config.timeout = options.timeout || 10000
+    _config.retries = options.retries || 2
+    if(options && options.servers){
+      _config.servers = options.servers
+    }
+    checkInternetConnected(_config)
+    .then(result => {
+      if(result && Array.isArray(result) && result.length > 0){
+        resolve(true)
+      } else {
+        resolve(false)
+      }
+    })
+    .catch(err => {
+      resolve(false)
+    })
+  })
+}
 
 var Interfaces = function(params = {}) {
-
   this.ttb_crypto = {
     bin: path.join(__dirname, 'bin', 'ttb-crypto'),
     algo: 'aes-256-gcm',
@@ -65,10 +237,16 @@ var Interfaces = function(params = {}) {
   var zoibOptions = {
     server: params.zoib_server,
     login:  params.zoib_login,
-    password:  params.zoib_password
+    password:  params.zoib_password,
+    token: params.zoib_token
   }
 
-  this.ZOIB = new Zoib(this, zoibOptions)
+  var coldfactsOptions = {
+    server: params.coldfacts_server
+  }
+
+  this.ZOIB = new ZOIB(this, zoibOptions)
+  this.Coldfacts = new Coldfacts(this, coldfactsOptions)
 }
 
 Interfaces.prototype.scanWiFi = function(){

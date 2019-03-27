@@ -1,6 +1,6 @@
 {
   "name": "ttbd-interface-utils",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "main": "index.js",
   "description": "An host interface module for TheThingBox under Docker",
   "scripts":{
@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "axios": "0.18.0",
+    "async-lock": "1.2.0",
+    "check-internet-connected": "1.1.2",
     "mqtt": "2.18.8",
     "mustache": "2.3.0",
     "uuid": "3.3.2"
