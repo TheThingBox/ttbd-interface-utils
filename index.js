@@ -470,6 +470,10 @@ Interfaces.prototype.hostExec = function(command, type = 'cmd'){
               try{
                 plaintext = JSON.parse(plaintext)
               } catch(e){}
+              if(plaintext.stderr){
+                plaintext.stderr = plaintext.stderr.split('\n').filter(e => e && e.indexOf(' warning: command substitution: ignored null byte in input') === -1).join('\n')
+              }
+              
               if(plaintext.error){
                 reject(plaintext.error)
               } else if(!plaintext.stdout && plaintext.stderr){
