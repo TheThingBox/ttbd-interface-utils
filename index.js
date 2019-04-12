@@ -87,7 +87,7 @@ ZOIB.prototype.getChallenge = function() {
         hash.update(`${resp.data.challenge}-${this._login}-${this._password}`)
         resolve(hash.digest('hex').toUpperCase())
       } else {
-        reject()
+        reject('cannot get a ZOIB challenge')
       }
     })
     .catch(reject)
@@ -103,7 +103,7 @@ ZOIB.prototype.login = function() {
         if(resp.data && resp.data.message.toLowerCase() === "ok" && resp.data.token && resp.data.user){
           resolve({token: resp.data.token, user: resp.data.user})
         } else {
-          reject()
+          resolve(null)
         }
       })
       .catch(reject)
@@ -358,7 +358,7 @@ Interfaces.prototype.enableAcessPointOnWlan = function(ssid_id = 'ap'){
     var _interfaces
     this.getInterfaces()
     .then(interfaces => {
-      if(!interfaces || !interfaces.hasOwnProperty('wlan0')){
+      if(!interfaces || interfaces.findIndex(item => item.name === 'wlan0') == -1){
         throw new Error('wlan0 interface is missing')
       }
       _interfaces = interfaces
@@ -473,7 +473,7 @@ Interfaces.prototype.hostExec = function(command, type = 'cmd'){
               if(plaintext.stderr){
                 plaintext.stderr = plaintext.stderr.split('\n').filter(e => e && e.indexOf(' warning: command substitution: ignored null byte in input') === -1).join('\n')
               }
-              
+
               if(plaintext.error){
                 reject(plaintext.error)
               } else if(!plaintext.stdout && plaintext.stderr){
@@ -564,14 +564,17 @@ Interfaces.prototype.getInterfaces = function(){
   return new Promise( (resolve, reject) => {
     this.hostExec('ip link show')
     .then( stdout => {
-      var interfaces = stdout.split('\n')
-      interfaces = interfaces.filter(e => e && !e.startsWith(' '))
-      var result = {}
-
-      for(var i in interfaces){
-        let netInterface = interfaces[i].replace(/\s\s+/g, ' ').split(' ')
+      var interfaces = stdout
+      .split('\n')
+      .filter(item => item && !item.startsWith(' '))
+      .map(item => {
+        let netInterface = item.replace(/\s\s+/g, ' ').split(' ')
+        if(netInterface.length < 2){
+          return null
+        }
         let interfaceName = netInterface[1].slice(0, -1)
-        result[interfaceName] = {
+        return {
+          name: interfaceName,
           state: Interfaces.ipLinkShowParseParam(netInterface, 'state'),
           mode: Interfaces.ipLinkShowParseParam(netInterface, 'mode'),
           mtu: Interfaces.ipLinkShowParseParam(netInterface, 'mtu'),
@@ -579,8 +582,10 @@ Interfaces.prototype.getInterfaces = function(){
           qdisc: Interfaces.ipLinkShowParseParam(netInterface, 'qdisc'),
           qlen: Interfaces.ipLinkShowParseParam(netInterface, 'qlen')
         }
-      }
-      resolve(result)
+      })
+      .filter(item => item && item.name.indexOf('docker') !== 0 && item.name.indexOf('veth') && item.name.indexOf('br-'))
+
+      resolve(interfaces)
     })
     .catch( error => {
       reject(error)
